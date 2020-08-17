@@ -46,6 +46,7 @@ metadata {
         attribute "forecastToday", "string"
         attribute "forecastTonight", "string"
         attribute "forecastTomorrow", "string"
+        attribute "temperatureActual", "string"
     }
 
     preferences {
@@ -96,14 +97,14 @@ metadata {
 		}
 
 		valueTile("city", "device.city", decoration: "flat") {
-			state "default", label:'${currentValue}'
+			state "default", label:'City: ${currentValue}'
 		}
 
 		standardTile("refresh", "device.weather", decoration: "flat", width: 2, height: 1) {
 			state "default", label: "", action: "refresh", icon:"st.secondary.refresh"
 		}
 
-        valueTile("statusText", "device.statusText", width: 2, height: 1, decoration: "flat") {
+        valueTile("statusText", "device.lastUpdate", width: 2, height: 1, decoration: "flat") {
 			state "default", label:'${currentValue}'
 		}
 
@@ -119,9 +120,13 @@ metadata {
 					[value: 96, color: "#bc2323"]
 				]
 		}
+        
+        valueTile("wind", "device.windVector", decoration: "flat", height: 1, width: 1) {
+            state "default", label:'Wind:\n${currentValue}'
+        }
 
 		main(["temperature","dewPoint"])
-		details(["temperature", "dewPoint","temperatureActual", "refresh","humidity","city","statusText"])}
+		details(["temperature", "dewPoint","temperatureActual", "refresh","wind","city","statusText"])}
 }
 
 
@@ -142,16 +147,16 @@ def uninstalled() {
 // handle commands
 def poll() {
     log.info "WUSTATION: Executing 'poll', location: ${location.name}"
-    if (stationId) {
-        pollUsingPwsId(stationId.toUpperCase())
-    } else {
-        if (zipCode && zipCode.toUpperCase().startsWith('PWS:')) {
-            log.debug zipCode.substring(4)
-            pollUsingPwsId(zipCode.substring(4).toUpperCase())
-        } else {
+//    if (stationId) {
+//        pollUsingPwsId(stationId.toUpperCase())
+//    } else {
+//        if (zipCode && zipCode.toUpperCase().startsWith('PWS:')) {
+//            log.debug zipCode.substring(4)
+//            pollUsingPwsId(zipCode.substring(4).toUpperCase())
+//        } else {
             pollUsingZipCode(zipCode?.toUpperCase())
-        }
-    }
+//        }
+//    }
 }
 
 def pollUsingZipCode(String zipCode) {
@@ -167,6 +172,28 @@ def pollUsingZipCode(String zipCode) {
     if (obs) {
         // TODO def weatherIcon = obs.icon_url.split("/")[-1].split("\\.")[0]
 		log.debug "tempUnits: $tempUnits"
+        def obssta
+        def obsstatop
+        def dScale
+        def int humidity
+        if (stationId) {
+            def obsWrapper = getTwcPwsConditions(stationId.toUpperCase())
+            if (obsWrapper && obsWrapper.observations && obsWrapper.observations.size()) {
+                obsstatop = obsWrapper.observations[0]
+                log.debug "$obsstatop"
+                def dataScale = obsstatop.imperial ? 'imperial' : 'metric'
+                log.debug "$dataScale"
+                obssta = obsstatop.imperial
+                dScale = dataScale
+                log.debug "$obssta"
+            }
+        }
+        log.debug "Units $tempUnits"
+        if (stationId) {
+            log.debug "obssta.temp $obssta.temp"
+            log.debug "obssta.dewpt $obssta.dewpt"
+            log.debug "obsstatop.humidity $obsstatop.humidity"
+        }
         double myHumidFeelAdd
         double myWindFeelDrop
         double first
@@ -174,7 +201,13 @@ def pollUsingZipCode(String zipCode) {
         	// int humidity = Integer.parseInt(obs.relative_humidity[0..-2])
             // int dewpoint_c = obs.temp_c - ((100 - humidity) / 5)
             // def dewpoint_f = (dewpoint_c * 9 / 5) + 32
-            int dewpoint_f = obs.temperatureDewPoint
+            def int dewpoint_f
+            if (stationId) {
+            log.debug "$obssta.temp"
+            	dewpoint_f = obssta.dewpt * 1
+            } else {
+            	dewpoint_f = obs.temperatureDewPoint
+            }                
             log.debug "dewpoint_f: $dewpoint_f"
             if (dewpoint_f < 49) {
                 myHumidFeelAdd = 0
@@ -194,7 +227,12 @@ def pollUsingZipCode(String zipCode) {
             log.debug "myWindFeelDrop: $myWindFeelDrop"
         }
         if(tempUnits == "C") {
-        	int dewpoint_c = obs.temperatureDewPoint
+        	def int dewpoint_c
+            if (stationId) {
+            	dewpoint_c = obssta.dewpt * 1
+            } else {
+            	dewpoint_c = obs.temperatureDewPoint
+            }  
             log.debug "dewpoint_c: $dewpoint_c"
             if (dewpoint_c < 9) {
                 myHumidFeelAdd = 0
@@ -212,8 +250,14 @@ def pollUsingZipCode(String zipCode) {
             }
             log.debug "myWindFeelDrop: $myWindFeelDrop"
         }
-        log.debug "obs.temperature $obs.temperature"
-        int theTemp = obs.temperature
+        def int theTemp 
+        if (stationId) {
+            log.debug "temperature $obssta.temp"
+            theTemp = obssta.temp * 1
+        } else {
+            log.debug "temperature $obs.temperature"
+            theTemp = obs.temperature
+        }
         log.debug "theTemp $theTemp"
         int myFeelsLike = Math.round(theTemp + myHumidFeelAdd - myWindFeelDrop)
         log.debug "myFeelsLike $myFeelsLike"
@@ -222,8 +266,11 @@ def pollUsingZipCode(String zipCode) {
         send(name: "temperature", value: myFeelsLike, unit: tempUnits)
         send(name: "feelsLike", value: obs.temperatureFeelsLike, unit: tempUnits)
         send(name: "myFeelsLike", value: myFeelsLike, unit: tempUnits)
-        log.debug "obs.temperatureDewPoint $obs.temperatureDewPoint"
-		send(name: "dewPoint", value: obs.temperatureDewPoint, unit: tempUnits)
+        if (stationId) {
+            send(name: "dewPoint", value: obssta.dewpt, unit: tempUnits)
+        } else {
+            send(name: "dewPoint", value: obs.temperatureDewPoint, unit: tempUnits)
+        }
         send(name: "humidity", value: obs.relativeHumidity, unit: "%")
         send(name: "weather", value: obs.wxPhraseShort)
         send(name: "weatherIcon", value: obs.iconCode as String, displayed: false)
